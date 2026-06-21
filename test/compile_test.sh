@@ -224,6 +224,51 @@ bash "${COMPILE}" "${BUILD_DIR}" "${CACHE_DIR}" 2>&1
 assert_not_exists "${BUILD_DIR}/README.md"
 assert_exists "${BUILD_DIR}/keep.md"
 
+# --- Test 14: Literal negation also purges the path from the cache dir ---
+echo "=== Test 14: Literal negation purges cache dir ==="
+setup_cache; reset_build
+cat > "${BUILD_DIR}/.buildcache" << EOF
+node_modules
+!node_modules/lodash
+EOF
+bash "${COMPILE}" "${BUILD_DIR}" "${CACHE_DIR}" 2>&1
+# Removed from both the build dir and the cache dir so it is not reloaded next time.
+assert_not_exists "${BUILD_DIR}/node_modules/lodash"
+assert_not_exists "${CACHE_ROOT}/node_modules/lodash"
+# Non-negated cached files are left intact.
+assert_exists "${CACHE_ROOT}/node_modules/express/index.js"
+
+# --- Test 15: Glob negation also purges matching paths from the cache dir ---
+echo "=== Test 15: Glob negation purges cache dir ==="
+setup_cache; reset_build
+mkdir -p "${CACHE_ROOT}/public/assets"
+echo "manifest" > "${CACHE_ROOT}/public/assets/.sprockets-manifest-abc123.json"
+echo "css" > "${CACHE_ROOT}/public/assets/app-deadbeef.css"
+cat > "${BUILD_DIR}/.buildcache" << EOF
+public/assets
+!public/assets/*manifest-*.json
+EOF
+bash "${COMPILE}" "${BUILD_DIR}" "${CACHE_DIR}" 2>&1
+# The manifest is purged from both build and cache; other assets stay cached.
+assert_not_exists "${BUILD_DIR}/public/assets/.sprockets-manifest-abc123.json"
+assert_not_exists "${CACHE_ROOT}/public/assets/.sprockets-manifest-abc123.json"
+assert_exists "${BUILD_DIR}/public/assets/app-deadbeef.css"
+assert_exists "${CACHE_ROOT}/public/assets/app-deadbeef.css"
+
+# --- Test 16: Deep glob negation purges nested cache files ---
+echo "=== Test 16: Deep glob negation purges nested cache files ==="
+setup_cache; reset_build
+mkdir -p "${CACHE_ROOT}/node_modules/express/cache"
+echo "log" > "${CACHE_ROOT}/node_modules/express/cache/debug.log"
+cat > "${BUILD_DIR}/.buildcache" << EOF
+node_modules
+!**/*.log
+EOF
+bash "${COMPILE}" "${BUILD_DIR}" "${CACHE_DIR}" 2>&1
+assert_not_exists "${BUILD_DIR}/node_modules/express/cache/debug.log"
+assert_not_exists "${CACHE_ROOT}/node_modules/express/cache/debug.log"
+assert_exists "${CACHE_ROOT}/node_modules/express/index.js"
+
 # --- Cleanup ---
 rm -rf "${TESTDIR}"
 
