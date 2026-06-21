@@ -83,33 +83,35 @@ bash "${COMPILE}" "${BUILD_DIR}" "${CACHE_DIR}" 2>&1
 assert_exists "${BUILD_DIR}/node_modules/express/index.js"
 assert_exists "${BUILD_DIR}/node_modules/lodash/index.js"
 
-# --- Test 3: Glob pattern *.md ---
-echo "=== Test 3: Glob pattern (*.md) ==="
+# --- Test 3: Multiple literal file paths ---
+echo "=== Test 3: Multiple literal file paths ==="
 setup_cache; reset_build
 cat > "${BUILD_DIR}/.buildcache" << EOF
-*.md
+README.md
+NOTES.md
 EOF
 bash "${COMPILE}" "${BUILD_DIR}" "${CACHE_DIR}" 2>&1
 assert_exists "${BUILD_DIR}/README.md"
 assert_exists "${BUILD_DIR}/NOTES.md"
 assert_not_exists "${BUILD_DIR}/app.js"
 
-# --- Test 4: Glob pattern *.js ---
-echo "=== Test 4: Glob pattern (*.js) ==="
+# --- Test 4: Inclusion globs are treated literally (not expanded) ---
+echo "=== Test 4: Inclusion globs are not expanded ==="
 setup_cache; reset_build
 cat > "${BUILD_DIR}/.buildcache" << EOF
 *.js
 EOF
 bash "${COMPILE}" "${BUILD_DIR}" "${CACHE_DIR}" 2>&1
-assert_exists "${BUILD_DIR}/app.js"
-assert_exists "${BUILD_DIR}/util.js"
-assert_not_exists "${BUILD_DIR}/config.json"
+# A literal "*.js" file does not exist in the cache, so nothing is restored.
+assert_not_exists "${BUILD_DIR}/app.js"
+assert_not_exists "${BUILD_DIR}/util.js"
 
 # --- Test 5: Negation ---
 echo "=== Test 5: Negation with ! ==="
 setup_cache; reset_build
 cat > "${BUILD_DIR}/.buildcache" << EOF
-*.js
+app.js
+util.js
 !util.js
 EOF
 bash "${COMPILE}" "${BUILD_DIR}" "${CACHE_DIR}" 2>&1
@@ -131,18 +133,20 @@ assert_exists "${BUILD_DIR}/config.json"
 assert_exists "${BUILD_DIR}/app.js"
 assert_not_exists "${BUILD_DIR}/util.js"
 
-# --- Test 7: Deep glob with ** ---
-echo "=== Test 7: Deep glob with ** ==="
+# --- Test 7: Deep glob with ** in negation ---
+echo "=== Test 7: Deep glob with ** in negation ==="
 setup_cache; reset_build
 cat > "${BUILD_DIR}/.buildcache" << EOF
-**/node_modules
+node_modules
+code/server/node_modules
+!**/node_modules
 EOF
 bash "${COMPILE}" "${BUILD_DIR}" "${CACHE_DIR}" 2>&1
-assert_exists "${BUILD_DIR}/node_modules"
-assert_exists "${BUILD_DIR}/code/server/node_modules"
+assert_not_exists "${BUILD_DIR}/node_modules"
+assert_not_exists "${BUILD_DIR}/code/server/node_modules"
 
-# --- Test 8: Directory-only trailing slash ---
-echo "=== Test 8: Directory-only trailing slash ==="
+# --- Test 8: Directory path with trailing slash ---
+echo "=== Test 8: Directory path with trailing slash ==="
 setup_cache; reset_build
 cat > "${BUILD_DIR}/.buildcache" << EOF
 assets/
@@ -155,14 +159,70 @@ assert_not_exists "${BUILD_DIR}/config.json"
 echo "=== Test 9: Negation with glob ==="
 setup_cache; reset_build
 cat > "${BUILD_DIR}/.buildcache" << EOF
-*.md
-*.js
+README.md
+NOTES.md
+app.js
+util.js
 !*.md
 EOF
 bash "${COMPILE}" "${BUILD_DIR}" "${CACHE_DIR}" 2>&1
 assert_exists "${BUILD_DIR}/app.js"
+assert_exists "${BUILD_DIR}/util.js"
 assert_not_exists "${BUILD_DIR}/README.md"
 assert_not_exists "${BUILD_DIR}/NOTES.md"
+
+# --- Test 10: Many paths restored in parallel ---
+echo "=== Test 10: Many paths restored in parallel ==="
+setup_cache; reset_build
+for i in $(seq 1 30); do
+  echo "data${i}" > "${CACHE_ROOT}/file${i}.dat"
+done
+touch "${BUILD_DIR}/.buildcache"
+for i in $(seq 1 30); do
+  echo "file${i}.dat" >> "${BUILD_DIR}/.buildcache"
+done
+bash "${COMPILE}" "${BUILD_DIR}" "${CACHE_DIR}" 2>&1
+for i in $(seq 1 30); do
+  assert_exists "${BUILD_DIR}/file${i}.dat"
+done
+
+# --- Test 11: Literal negation inside a restored directory ---
+echo "=== Test 11: Literal negation inside a restored directory ==="
+setup_cache; reset_build
+cat > "${BUILD_DIR}/.buildcache" << EOF
+node_modules
+!node_modules/lodash
+EOF
+bash "${COMPILE}" "${BUILD_DIR}" "${CACHE_DIR}" 2>&1
+assert_exists "${BUILD_DIR}/node_modules/express/index.js"
+assert_not_exists "${BUILD_DIR}/node_modules/lodash"
+
+# --- Test 12: Glob negation inside a restored directory ---
+echo "=== Test 12: Glob negation inside a restored directory ==="
+setup_cache; reset_build
+mkdir -p "${CACHE_ROOT}/node_modules/express/cache"
+echo "log" > "${CACHE_ROOT}/node_modules/express/cache/debug.log"
+cat > "${BUILD_DIR}/.buildcache" << EOF
+node_modules
+!**/*.log
+EOF
+bash "${COMPILE}" "${BUILD_DIR}" "${CACHE_DIR}" 2>&1
+assert_exists "${BUILD_DIR}/node_modules/express/index.js"
+assert_not_exists "${BUILD_DIR}/node_modules/express/cache/debug.log"
+
+# --- Test 13: Negation never removes non-restored build files ---
+echo "=== Test 13: Negation never removes non-restored build files ==="
+setup_cache; reset_build
+echo "source" > "${BUILD_DIR}/keep.md"
+cat > "${BUILD_DIR}/.buildcache" << EOF
+README.md
+!*.md
+EOF
+bash "${COMPILE}" "${BUILD_DIR}" "${CACHE_DIR}" 2>&1
+# README.md was restored then removed by the negation; keep.md was never
+# restored from cache, so it must be left untouched.
+assert_not_exists "${BUILD_DIR}/README.md"
+assert_exists "${BUILD_DIR}/keep.md"
 
 # --- Cleanup ---
 rm -rf "${TESTDIR}"

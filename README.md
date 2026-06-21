@@ -25,26 +25,41 @@ code/server/node_modules
 code/client/node_modules
 code/client/bower_components
 
-# Cache all .jar files at any depth
-**/*.jar
-
-# Cache assets directory (trailing slash = directories only)
+# Cache a specific directory (trailing slash is optional)
 assets/
 
-# Exclude a specific path from being cached
-!code/client/node_modules/tmp
+# Cache an individual file
+config/credentials.json
+
+# Exclude previously listed paths from being cached
+!code/client/node_modules
 ```
 
 ### `.buildcache` Syntax
 
-The `.buildcache` file supports a `.gitignore`-like syntax:
+The `.buildcache` file supports a `.gitignore`-like syntax. For performance,
+inclusion and negation lines are handled differently:
 
-- **Literal paths**: `code/server/node_modules` — matches the exact path.
-- **Glob patterns**: `*.js`, `**/*.jar` — shell-style wildcards. `**` matches any depth.
-- **Directory-only** (trailing `/`): `assets/` — only matches directories.
-- **Negation** (`!`): `!path/to/exclude` — removes previously matched paths from the restore set.
+- **Inclusion** — a literal file or folder path that is added to the restore
+  set, e.g. `code/server/node_modules` or `config/credentials.json`. Folders are
+  restored recursively. Glob patterns are **not** expanded for inclusion lines;
+  list each path you want to restore explicitly. A trailing `/` (e.g. `assets/`)
+  is allowed and treated the same as the path without it.
+- **Negation** (`!`): `!path/or/glob` — after the inclusion paths are restored,
+  matching paths are removed from the restored files. Negation lines support
+  literal paths (including paths nested **inside** a restored folder, e.g.
+  `!code/client/node_modules/tmp`), directories, and glob patterns (`*`, `?`,
+  `[...]`); a leading `**/` matches at any depth, e.g. `!**/*.log`. Negations only
+  ever remove files that were restored from cache — they never touch other files
+  already present in the build directory.
 - **Comments** (`#`): Lines starting with `#` are ignored.
 - **Empty lines** are ignored.
+
+Listed paths that do not exist in the cache (for example on the first build,
+before anything has been cached) are silently skipped — they are logged as
+`✗ - not found` and do not fail the build.
+
+Inclusions are restored in parallel to speed up the cache load.
 
 ## Troubleshooting
 
