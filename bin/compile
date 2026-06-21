@@ -82,18 +82,41 @@ is_glob() {
 }
 
 
+# Remove a single negation target.  Deletes the path both from the build dir
+# (so the current build doesn't see it) and from the cache dir (so it is not
+# reloaded on future builds).  Honours NEG_DIR_ONLY (a trailing slash that
+# means "directories only").  Echoes nothing; sets REMOVED=true when anything
+# was deleted.
+remove_negation_target() {
+  local build_target=$1
+  local cache_target=$2
+  local path
+  for path in "${build_target}" "${cache_target}"; do
+    [ -e "${path}" ] || continue
+    if ${NEG_DIR_ONLY} && ! [ -d "${path}" ]; then
+      continue
+    fi
+    rm -r "${path}"
+    REMOVED=true
+  done
+}
+
+
 # Resolve where a negation pattern applies: sets NEG_ROOT (the filesystem root
-# the pattern is relative to), NEG_SUB (the pattern without any ~/ prefix or
-# trailing slash) and NEG_DIR_ONLY (true when a trailing slash means it should
-# only match directories).
+# the pattern is relative to), NEG_CACHE_ROOT (the matching root inside the
+# cache dir), NEG_SUB (the pattern without any ~/ prefix or trailing slash) and
+# NEG_DIR_ONLY (true when a trailing slash means it should only match
+# directories).
 resolve_negation() {
   local pattern=$1
   NEG_DIR_ONLY=false
   if [[ ${pattern} = \~/* ]]; then
     NEG_ROOT="${HOME}"
+    NEG_CACHE_ROOT="${CACHE_DIR}/buildcache/${HOME_FOLDER_REPLACEMENT}"
     NEG_SUB="${pattern#\~/}"
   else
     NEG_ROOT="${BUILD_DIR}"
+    NEG_CACHE_ROOT="${CACHE_DIR}/buildcache"
     NEG_SUB="${pattern}"
   fi
   if [[ "${NEG_SUB}" == */ ]]; then
@@ -104,40 +127,34 @@ resolve_negation() {
 
 
 # Remove a literal (non-glob) negation directly – no filesystem scan required,
-# which keeps things fast when there are many cached paths.
+# which keeps things fast when there are many cached paths.  The path is purged
+# from both the build dir and the cache dir.
 remove_literal_negation() {
   local pattern=$1
   resolve_negation "${pattern}"
-  local target="${NEG_ROOT}/${NEG_SUB}"
-  [ -e "${target}" ] || return
-  if ${NEG_DIR_ONLY} && ! [ -d "${target}" ]; then
-    return
-  fi
-  rm -r "${target}"
-  echo "! ${pattern} ✓ removed" | indent
+  REMOVED=false
+  remove_negation_target "${NEG_ROOT}/${NEG_SUB}" "${NEG_CACHE_ROOT}/${NEG_SUB}"
+  ${REMOVED} && echo "! ${pattern} ✓ removed" | indent
 }
 
 
 # Remove a glob negation by matching it against the paths that were actually
 # restored (passed in as relative paths, one per argument after the pattern).
 # Only restored paths are considered, so a negation can never delete files that
-# were not loaded from cache.
+# were not loaded from cache.  Matching paths are purged from both the build dir
+# and the cache dir, so old cache files are cleaned up instead of being reloaded
+# on every build.
 remove_glob_negation() {
   local pattern=$1
   shift
   resolve_negation "${pattern}"
-  local rel removed=false
+  local rel
+  REMOVED=false
   for rel in "$@"; do
     matches_pattern "${rel}" "${NEG_SUB}" || continue
-    local target="${NEG_ROOT}/${rel}"
-    [ -e "${target}" ] || continue
-    if ${NEG_DIR_ONLY} && ! [ -d "${target}" ]; then
-      continue
-    fi
-    rm -r "${target}"
-    removed=true
+    remove_negation_target "${NEG_ROOT}/${rel}" "${NEG_CACHE_ROOT}/${rel}"
   done
-  ${removed} && echo "! ${pattern} ✓ removed" | indent
+  ${REMOVED} && echo "! ${pattern} ✓ removed" | indent
 }
 
 

@@ -51,7 +51,10 @@ inclusion and negation lines are handled differently:
   `!code/client/node_modules/tmp`), directories, and glob patterns (`*`, `?`,
   `[...]`); a leading `**/` matches at any depth, e.g. `!**/*.log`. Negations only
   ever remove files that were restored from cache — they never touch other files
-  already present in the build directory.
+  already present in the build directory. Matching paths are also purged from the
+  **cache directory** itself, so excluded/old cache files are cleaned up on every
+  build instead of being reloaded each time (this keeps the cache, and therefore
+  the slug, from growing without bound).
 - **Comments** (`#`): Lines starting with `#` are ignored.
 - **Empty lines** are ignored.
 
@@ -60,6 +63,24 @@ before anything has been cached) are silently skipped — they are logged as
 `✗ - not found` and do not fail the build.
 
 Inclusions are restored in parallel to speed up the cache load.
+
+### Rails `assets:precompile` caching
+
+A common use case is caching compiled Rails assets together with
+[`heroku-buildpack-cachesave`](https://github.com/moonproject/heroku-buildpack-cachesave):
+
+```
+public/assets
+tmp/cache
+
+# Drop the Sprockets manifest so the Ruby buildpack re-runs assets:precompile
+# instead of skipping it when a manifest is present.
+!public/assets/*manifest-*.json
+```
+
+Because negations are now purged from the cache directory too, the stale
+manifest is cleaned up on each build rather than being reloaded every time,
+which prevents the cache (and the resulting slug) from growing on every deploy.
 
 ## Troubleshooting
 
