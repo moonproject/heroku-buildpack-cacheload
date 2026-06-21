@@ -25,26 +25,33 @@ code/server/node_modules
 code/client/node_modules
 code/client/bower_components
 
-# Cache all .jar files at any depth
-**/*.jar
-
-# Cache assets directory (trailing slash = directories only)
+# Cache a specific directory (trailing slash is optional)
 assets/
 
-# Exclude a specific path from being cached
-!code/client/node_modules/tmp
+# Cache an individual file
+config/credentials.json
+
+# Exclude previously listed paths from being cached
+!code/client/node_modules
 ```
 
 ### `.buildcache` Syntax
 
-The `.buildcache` file supports a `.gitignore`-like syntax:
+The `.buildcache` file supports a `.gitignore`-like syntax. For performance,
+inclusion and negation lines are handled differently:
 
-- **Literal paths**: `code/server/node_modules` — matches the exact path.
-- **Glob patterns**: `*.js`, `**/*.jar` — shell-style wildcards. `**` matches any depth.
-- **Directory-only** (trailing `/`): `assets/` — only matches directories.
-- **Negation** (`!`): `!path/to/exclude` — removes previously matched paths from the restore set.
+- **Inclusion** — a literal file or folder path that is added to the restore
+  set, e.g. `code/server/node_modules` or `config/credentials.json`. Folders are
+  restored recursively. Glob patterns are **not** expanded for inclusion lines;
+  list each path you want to restore explicitly. A trailing `/` (e.g. `assets/`)
+  is allowed and treated the same as the path without it.
+- **Negation** (`!`): `!path/or/glob` — removes already-listed paths from the
+  restore set. Negation lines **do** support glob patterns (`*`, `?`, `[...]`),
+  and a leading `**/` matches at any depth, e.g. `!**/node_modules`.
 - **Comments** (`#`): Lines starting with `#` are ignored.
 - **Empty lines** are ignored.
+
+Inclusions are restored in parallel to speed up the cache load.
 
 ## Troubleshooting
 

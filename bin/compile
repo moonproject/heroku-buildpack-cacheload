@@ -50,59 +50,28 @@ restore_path() {
 }
 
 
-# Expand a glob pattern against the cache directory tree and print matching
-# relative paths (one per line).  Handles plain paths, directory patterns
-# (trailing /), and shell globs.
-expand_pattern() {
-  local pattern=$1
-  local cache_root="${CACHE_DIR}/buildcache"
+# Test whether a collected path matches a negation pattern.  Matching is done
+# entirely in memory (no filesystem scan) so it stays fast regardless of how
+# large the cache is.  Supports shell globs (*, ?, []) and a leading "**/" to
+# match at any depth, plus a trailing "/" to mean "directory path only".
+matches_pattern() {
+  local path=$1
+  local pattern=$2
 
-  # If the cache root doesn't exist yet there is nothing to expand.
-  if ! [ -d "${cache_root}" ]; then
-    return
+  # Trailing slash – treat as the directory path itself.
+  pattern="${pattern%/}"
+
+  # Direct glob match (bash extended pattern matching).
+  [[ "${path}" == ${pattern} ]] && return 0
+
+  # "**/<rest>" matches <rest> at the root or at any depth.
+  if [[ "${pattern}" == \*\*/* ]]; then
+    local rest="${pattern#\*\*/}"
+    [[ "${path}" == ${rest} ]] && return 0
+    [[ "${path}" == */${rest} ]] && return 0
   fi
 
-  # Trailing slash means "match directories only".
-  local dir_only=false
-  if [[ "${pattern}" == */ ]]; then
-    dir_only=true
-    pattern="${pattern%/}"
-  fi
-
-  # Use find when the pattern contains glob characters, otherwise treat it as
-  # a literal path.
-  if [[ "${pattern}" == *\** || "${pattern}" == *\?* || "${pattern}" == *\[* ]]; then
-    # Convert glob to find -path pattern.  A leading ** should match at any
-    # depth; other uses of * are kept as-is (single-level match is close
-    # enough for practical purposes with find's -path).
-    local find_patterns=()
-    if [[ "${pattern}" == \*\*/* ]]; then
-      # "**/<rest>" → match at any depth, including root level
-      local rest="${pattern#\*\*/}"
-      find_patterns+=("./${rest}")
-      find_patterns+=("*/${rest}")
-    else
-      find_patterns+=("./${pattern}")
-    fi
-
-    while IFS= read -r match; do
-      [[ -z "${match}" ]] && continue
-      # match is relative to cache_root (leading ./ stripped)
-      local rel="${match#./}"
-      if ${dir_only} && ! [ -d "${cache_root}/${rel}" ]; then
-        continue
-      fi
-      echo "${rel}"
-    done < <(cd "${cache_root}" && for fp in "${find_patterns[@]}"; do find . -path "${fp}" 2>/dev/null; done | sed 's|^\./||' | sort -u)
-  else
-    # Literal path – just check existence.
-    if [ -e "${cache_root}/${pattern}" ]; then
-      if ${dir_only} && ! [ -d "${cache_root}/${pattern}" ]; then
-        return
-      fi
-      echo "${pattern}"
-    fi
-  fi
+  return 1
 }
 
 
@@ -113,9 +82,11 @@ HOME_FOLDER_REPLACEMENT="__CACHE_HOME__"
 
 echo "=====> Restoring files from cache"
 
-# Collect the final set of paths to restore.  Inclusion patterns add paths,
-# negation patterns (starting with !) remove them.  Order matters – just like
-# .gitignore, later rules override earlier ones.
+# Collect the final set of paths to restore.  Inclusion lines are literal
+# file/folder paths that are added directly (no cache scan needed – cp -r
+# handles directory recursion at restore time).  Negation lines (starting with
+# !) support glob patterns and remove any already-collected paths that match.
+# Order matters – just like .gitignore, later rules override earlier ones.
 
 # Use an associative array to track included paths (value "1" = included).
 declare -A RESTORE_SET
@@ -129,18 +100,22 @@ while IFS= read -r line || [[ -n "${line}" ]]; do
   [[ "${line}" == \#* ]] && continue
 
   if [[ "${line}" == \!* ]]; then
-    # Negation – remove matching paths from the restore set.
+    # Negation – remove matching paths from the restore set using in-memory
+    # glob matching against the already-collected paths.
     local_pattern="${line#!}"
     # Strip whitespace again after removing !
     local_pattern="$(echo "${local_pattern}" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
-    while IFS= read -r match; do
-      [[ -n "${match}" ]] && unset RESTORE_SET["${match}"]
-    done < <(expand_pattern "${local_pattern}")
+    [[ -z "${local_pattern}" ]] && continue
+    for collected in "${!RESTORE_SET[@]}"; do
+      if matches_pattern "${collected}" "${local_pattern}"; then
+        unset RESTORE_SET["${collected}"]
+      fi
+    done
   else
-    # Inclusion – add matching paths to the restore set.
-    while IFS= read -r match; do
-      [[ -n "${match}" ]] && RESTORE_SET["${match}"]=1
-    done < <(expand_pattern "${line}")
+    # Inclusion – add the literal file/folder path to the restore set.  A
+    # trailing slash is normalised away; restore_path copies it recursively.
+    line="${line%/}"
+    [[ -n "${line}" ]] && RESTORE_SET["${line}"]=1
   fi
 done < "${BUILD_DIR}/.buildcache"
 
