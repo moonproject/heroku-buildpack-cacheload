@@ -186,6 +186,44 @@ for i in $(seq 1 30); do
   assert_exists "${BUILD_DIR}/file${i}.dat"
 done
 
+# --- Test 11: Literal negation inside a restored directory ---
+echo "=== Test 11: Literal negation inside a restored directory ==="
+setup_cache; reset_build
+cat > "${BUILD_DIR}/.buildcache" << EOF
+node_modules
+!node_modules/lodash
+EOF
+bash "${COMPILE}" "${BUILD_DIR}" "${CACHE_DIR}" 2>&1
+assert_exists "${BUILD_DIR}/node_modules/express/index.js"
+assert_not_exists "${BUILD_DIR}/node_modules/lodash"
+
+# --- Test 12: Glob negation inside a restored directory ---
+echo "=== Test 12: Glob negation inside a restored directory ==="
+setup_cache; reset_build
+mkdir -p "${CACHE_ROOT}/node_modules/express/cache"
+echo "log" > "${CACHE_ROOT}/node_modules/express/cache/debug.log"
+cat > "${BUILD_DIR}/.buildcache" << EOF
+node_modules
+!**/*.log
+EOF
+bash "${COMPILE}" "${BUILD_DIR}" "${CACHE_DIR}" 2>&1
+assert_exists "${BUILD_DIR}/node_modules/express/index.js"
+assert_not_exists "${BUILD_DIR}/node_modules/express/cache/debug.log"
+
+# --- Test 13: Negation never removes non-restored build files ---
+echo "=== Test 13: Negation never removes non-restored build files ==="
+setup_cache; reset_build
+echo "source" > "${BUILD_DIR}/keep.md"
+cat > "${BUILD_DIR}/.buildcache" << EOF
+README.md
+!*.md
+EOF
+bash "${COMPILE}" "${BUILD_DIR}" "${CACHE_DIR}" 2>&1
+# README.md was restored then removed by the negation; keep.md was never
+# restored from cache, so it must be left untouched.
+assert_not_exists "${BUILD_DIR}/README.md"
+assert_exists "${BUILD_DIR}/keep.md"
+
 # --- Cleanup ---
 rm -rf "${TESTDIR}"
 

@@ -45,9 +45,13 @@ inclusion and negation lines are handled differently:
   restored recursively. Glob patterns are **not** expanded for inclusion lines;
   list each path you want to restore explicitly. A trailing `/` (e.g. `assets/`)
   is allowed and treated the same as the path without it.
-- **Negation** (`!`): `!path/or/glob` — removes already-listed paths from the
-  restore set. Negation lines **do** support glob patterns (`*`, `?`, `[...]`),
-  and a leading `**/` matches at any depth, e.g. `!**/node_modules`.
+- **Negation** (`!`): `!path/or/glob` — after the inclusion paths are restored,
+  matching paths are removed from the restored files. Negation lines support
+  literal paths (including paths nested **inside** a restored folder, e.g.
+  `!code/client/node_modules/tmp`), directories, and glob patterns (`*`, `?`,
+  `[...]`); a leading `**/` matches at any depth, e.g. `!**/*.log`. Negations only
+  ever remove files that were restored from cache — they never touch other files
+  already present in the build directory.
 - **Comments** (`#`): Lines starting with `#` are ignored.
 - **Empty lines** are ignored.
 

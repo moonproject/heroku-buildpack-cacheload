@@ -75,6 +75,72 @@ matches_pattern() {
 }
 
 
+# Return success if the pattern contains shell glob metacharacters.
+is_glob() {
+  local p=$1
+  [[ "${p}" == *'*'* || "${p}" == *'?'* || "${p}" == *'['* ]]
+}
+
+
+# Resolve where a negation pattern applies: sets NEG_ROOT (the filesystem root
+# the pattern is relative to), NEG_SUB (the pattern without any ~/ prefix or
+# trailing slash) and NEG_DIR_ONLY (true when a trailing slash means it should
+# only match directories).
+resolve_negation() {
+  local pattern=$1
+  NEG_DIR_ONLY=false
+  if [[ ${pattern} = \~/* ]]; then
+    NEG_ROOT="${HOME}"
+    NEG_SUB="${pattern#\~/}"
+  else
+    NEG_ROOT="${BUILD_DIR}"
+    NEG_SUB="${pattern}"
+  fi
+  if [[ "${NEG_SUB}" == */ ]]; then
+    NEG_DIR_ONLY=true
+    NEG_SUB="${NEG_SUB%/}"
+  fi
+}
+
+
+# Remove a literal (non-glob) negation directly – no filesystem scan required,
+# which keeps things fast when there are many cached paths.
+remove_literal_negation() {
+  local pattern=$1
+  resolve_negation "${pattern}"
+  local target="${NEG_ROOT}/${NEG_SUB}"
+  [ -e "${target}" ] || return
+  if ${NEG_DIR_ONLY} && ! [ -d "${target}" ]; then
+    return
+  fi
+  rm -r "${target}"
+  echo "! ${pattern} ✓ removed" | indent
+}
+
+
+# Remove a glob negation by matching it against the paths that were actually
+# restored (passed in as relative paths, one per argument after the pattern).
+# Only restored paths are considered, so a negation can never delete files that
+# were not loaded from cache.
+remove_glob_negation() {
+  local pattern=$1
+  shift
+  resolve_negation "${pattern}"
+  local rel removed=false
+  for rel in "$@"; do
+    matches_pattern "${rel}" "${NEG_SUB}" || continue
+    local target="${NEG_ROOT}/${rel}"
+    [ -e "${target}" ] || continue
+    if ${NEG_DIR_ONLY} && ! [ -d "${target}" ]; then
+      continue
+    fi
+    rm -r "${target}"
+    removed=true
+  done
+  ${removed} && echo "! ${pattern} ✓ removed" | indent
+}
+
+
 BUILD_DIR=$1
 CACHE_DIR=$2
 HOME_FOLDER_REPLACEMENT="__CACHE_HOME__"
@@ -82,14 +148,18 @@ HOME_FOLDER_REPLACEMENT="__CACHE_HOME__"
 
 echo "=====> Restoring files from cache"
 
-# Collect the final set of paths to restore.  Inclusion lines are literal
-# file/folder paths that are added directly (no cache scan needed – cp -r
-# handles directory recursion at restore time).  Negation lines (starting with
-# !) support glob patterns and remove any already-collected paths that match.
-# Order matters – just like .gitignore, later rules override earlier ones.
+# Collect the set of paths to restore and the list of negations to apply.
+# Inclusion lines are literal file/folder paths added directly (no cache scan –
+# cp -r handles directory recursion at restore time).  Negation lines (starting
+# with !) may be literal paths, directories or glob patterns; they are applied
+# AFTER restoring, by removing matching paths from the restored tree.  In our
+# use cases there are far fewer negations than inclusions, so the heavier
+# pattern handling only runs over the small negation set.
 
-# Use an associative array to track included paths (value "1" = included).
+# Use an associative array to track included paths (value "1" = included) and an
+# ordered list to track negations.
 declare -A RESTORE_SET
+NEGATIONS=()
 
 while IFS= read -r line || [[ -n "${line}" ]]; do
   # Strip leading/trailing whitespace.
@@ -100,17 +170,11 @@ while IFS= read -r line || [[ -n "${line}" ]]; do
   [[ "${line}" == \#* ]] && continue
 
   if [[ "${line}" == \!* ]]; then
-    # Negation – remove matching paths from the restore set using in-memory
-    # glob matching against the already-collected paths.
+    # Negation – record the pattern; it is applied after restoring.
     local_pattern="${line#!}"
     # Strip whitespace again after removing !
     local_pattern="$(echo "${local_pattern}" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
-    [[ -z "${local_pattern}" ]] && continue
-    for collected in "${!RESTORE_SET[@]}"; do
-      if matches_pattern "${collected}" "${local_pattern}"; then
-        unset RESTORE_SET["${collected}"]
-      fi
-    done
+    [[ -n "${local_pattern}" ]] && NEGATIONS+=("${local_pattern}")
   else
     # Inclusion – add the literal file/folder path to the restore set.  A
     # trailing slash is normalised away; restore_path copies it recursively.
@@ -136,3 +200,41 @@ done
 
 # Wait for any remaining background copies to complete.
 wait
+
+# Apply negations against the restored tree.  Literal negations are removed
+# directly; glob negations are matched only against paths that were actually
+# restored, so they can never delete files that weren't loaded from cache.
+if [ "${#NEGATIONS[@]}" -gt 0 ]; then
+  GLOB_NEGATIONS=()
+  for PATTERN in "${NEGATIONS[@]}"; do
+    if is_glob "${PATTERN}"; then
+      GLOB_NEGATIONS+=("${PATTERN}")
+    else
+      remove_literal_negation "${PATTERN}"
+    fi
+  done
+
+  # Glob negations need the list of restored paths.  Build it once by walking
+  # only the restored positive subtrees (after literal negations have run).
+  if [ "${#GLOB_NEGATIONS[@]}" -gt 0 ]; then
+    BUILD_PATHS=()
+    HOME_PATHS=()
+    for FILENAME in "${!RESTORE_SET[@]}"; do
+      resolve_paths "${FILENAME}"
+      [ -e "${DEST}" ] || continue
+      if [[ ${FILENAME} = \~/* ]]; then
+        while IFS= read -r f; do HOME_PATHS+=("${f#${HOME}/}"); done < <(find "${DEST}")
+      else
+        while IFS= read -r f; do BUILD_PATHS+=("${f#${BUILD_DIR}/}"); done < <(find "${DEST}")
+      fi
+    done
+
+    for PATTERN in "${GLOB_NEGATIONS[@]}"; do
+      if [[ ${PATTERN} = \~/* ]]; then
+        remove_glob_negation "${PATTERN}" "${HOME_PATHS[@]}"
+      else
+        remove_glob_negation "${PATTERN}" "${BUILD_PATHS[@]}"
+      fi
+    done
+  fi
+fi
