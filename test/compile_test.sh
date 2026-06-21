@@ -164,6 +164,20 @@ assert_exists "${BUILD_DIR}/app.js"
 assert_not_exists "${BUILD_DIR}/README.md"
 assert_not_exists "${BUILD_DIR}/NOTES.md"
 
+# --- Test 10: Many paths restored in parallel ---
+echo "=== Test 10: Many paths restored in parallel ==="
+setup_cache; reset_build
+for i in $(seq 1 30); do
+  echo "data${i}" > "${CACHE_ROOT}/file${i}.dat"
+done
+cat > "${BUILD_DIR}/.buildcache" << EOF
+*.dat
+EOF
+bash "${COMPILE}" "${BUILD_DIR}" "${CACHE_DIR}" 2>&1
+for i in $(seq 1 30); do
+  assert_exists "${BUILD_DIR}/file${i}.dat"
+done
+
 # --- Cleanup ---
 rm -rf "${TESTDIR}"
 

@@ -23,16 +23,15 @@ resolve_paths() {
 }
 
 
-# Copy a single file or directory from cache to build dir.
+# Copy a single file or directory from cache to build dir.  Output is emitted
+# as a single line so it stays readable when many restores run in parallel.
 restore_path() {
   local filename=$1
   resolve_paths "${filename}"
 
-  echo -n "${filename}" | indent
-
   # skip non-existing files
   if ! [ -e "${SRC}" ]; then
-    echo " ✗ - not found"
+    echo "${filename} ✗ - not found" | indent
     return
   fi
 
@@ -47,7 +46,7 @@ restore_path() {
   # copy files from cache
   cp -r "${SRC}" "${DEST}"
 
-  echo " ✓"
+  echo "${filename} ✓" | indent
 }
 
 
@@ -145,7 +144,20 @@ while IFS= read -r line || [[ -n "${line}" ]]; do
   fi
 done < "${BUILD_DIR}/.buildcache"
 
-# Restore all collected paths.
+# Restore all collected paths.  Copying is done in parallel to speed up the
+# restore – each path is independent, so we run several copies concurrently
+# while capping the number of background jobs to avoid overloading the dyno.
+MAX_JOBS="$( (command -v nproc >/dev/null 2>&1 && nproc) || echo 4)"
+[[ "${MAX_JOBS}" =~ ^[0-9]+$ ]] && [ "${MAX_JOBS}" -ge 1 ] || MAX_JOBS=4
+
 for FILENAME in "${!RESTORE_SET[@]}"; do
-  restore_path "${FILENAME}"
+  restore_path "${FILENAME}" &
+
+  # Throttle: wait for a job to finish once we hit the concurrency limit.
+  while [ "$(jobs -p | wc -l)" -ge "${MAX_JOBS}" ]; do
+    wait -n 2>/dev/null || wait
+  done
 done
+
+# Wait for any remaining background copies to complete.
+wait
