@@ -8,6 +8,105 @@ indent() {
 }
 
 
+# Resolve a cached path to its source (in cache dir) and destination (in build
+# dir or home dir).  Sets SRC and DEST variables.
+resolve_paths() {
+  local filename=$1
+  if [[ ${filename} = \~/* ]]; then
+    local without_tilde=${filename#\~/}
+    SRC="${CACHE_DIR}/buildcache/${HOME_FOLDER_REPLACEMENT}/${without_tilde}"
+    DEST="${HOME}/${without_tilde}"
+  else
+    SRC="${CACHE_DIR}/buildcache/${filename}"
+    DEST="${BUILD_DIR}/${filename}"
+  fi
+}
+
+
+# Copy a single file or directory from cache to build dir.
+restore_path() {
+  local filename=$1
+  resolve_paths "${filename}"
+
+  echo -n "${filename}" | indent
+
+  # skip non-existing files
+  if ! [ -e "${SRC}" ]; then
+    echo " ✗ - not found"
+    return
+  fi
+
+  # create parent directory structure
+  mkdir -p "$(dirname "${DEST}")"
+
+  # delete old files
+  if [ -e "${DEST}" ]; then
+    rm -r "${DEST}"
+  fi
+
+  # copy files from cache
+  cp -r "${SRC}" "${DEST}"
+
+  echo " ✓"
+}
+
+
+# Expand a glob pattern against the cache directory tree and print matching
+# relative paths (one per line).  Handles plain paths, directory patterns
+# (trailing /), and shell globs.
+expand_pattern() {
+  local pattern=$1
+  local cache_root="${CACHE_DIR}/buildcache"
+
+  # If the cache root doesn't exist yet there is nothing to expand.
+  if ! [ -d "${cache_root}" ]; then
+    return
+  fi
+
+  # Trailing slash means "match directories only".
+  local dir_only=false
+  if [[ "${pattern}" == */ ]]; then
+    dir_only=true
+    pattern="${pattern%/}"
+  fi
+
+  # Use find when the pattern contains glob characters, otherwise treat it as
+  # a literal path.
+  if [[ "${pattern}" == *\** || "${pattern}" == *\?* || "${pattern}" == *\[* ]]; then
+    # Convert glob to find -path pattern.  A leading ** should match at any
+    # depth; other uses of * are kept as-is (single-level match is close
+    # enough for practical purposes with find's -path).
+    local find_patterns=()
+    if [[ "${pattern}" == \*\*/* ]]; then
+      # "**/<rest>" → match at any depth, including root level
+      local rest="${pattern#\*\*/}"
+      find_patterns+=("./${rest}")
+      find_patterns+=("*/${rest}")
+    else
+      find_patterns+=("./${pattern}")
+    fi
+
+    while IFS= read -r match; do
+      [[ -z "${match}" ]] && continue
+      # match is relative to cache_root (leading ./ stripped)
+      local rel="${match#./}"
+      if ${dir_only} && ! [ -d "${cache_root}/${rel}" ]; then
+        continue
+      fi
+      echo "${rel}"
+    done < <(cd "${cache_root}" && for fp in "${find_patterns[@]}"; do find . -path "${fp}" 2>/dev/null; done | sed 's|^\./||' | sort -u)
+  else
+    # Literal path – just check existence.
+    if [ -e "${cache_root}/${pattern}" ]; then
+      if ${dir_only} && ! [ -d "${cache_root}/${pattern}" ]; then
+        return
+      fi
+      echo "${pattern}"
+    fi
+  fi
+}
+
+
 BUILD_DIR=$1
 CACHE_DIR=$2
 HOME_FOLDER_REPLACEMENT="__CACHE_HOME__"
@@ -15,34 +114,38 @@ HOME_FOLDER_REPLACEMENT="__CACHE_HOME__"
 
 echo "=====> Restoring files from cache"
 
-for FILENAME in $(cat ${BUILD_DIR}/.buildcache | sed '/^$/d'); do
-  echo -n "${FILENAME}" | indent
+# Collect the final set of paths to restore.  Inclusion patterns add paths,
+# negation patterns (starting with !) remove them.  Order matters – just like
+# .gitignore, later rules override earlier ones.
 
-  if [[ ${FILENAME} = \~/* ]]; then
-    WITHOUT_TILDE=$(echo ${FILENAME} | sed 's/~\///')
-    SRC=${CACHE_DIR}/buildcache/${HOME_FOLDER_REPLACEMENT}/${WITHOUT_TILDE}
-    DEST=~/${WITHOUT_TILDE}
+# Use an associative array to track included paths (value "1" = included).
+declare -A RESTORE_SET
+
+while IFS= read -r line || [[ -n "${line}" ]]; do
+  # Strip leading/trailing whitespace.
+  line="$(echo "${line}" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+
+  # Skip empty lines and comments.
+  [[ -z "${line}" ]] && continue
+  [[ "${line}" == \#* ]] && continue
+
+  if [[ "${line}" == \!* ]]; then
+    # Negation – remove matching paths from the restore set.
+    local_pattern="${line#!}"
+    # Strip whitespace again after removing !
+    local_pattern="$(echo "${local_pattern}" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+    while IFS= read -r match; do
+      [[ -n "${match}" ]] && unset RESTORE_SET["${match}"]
+    done < <(expand_pattern "${local_pattern}")
   else
-    SRC=${CACHE_DIR}/buildcache/${FILENAME}
-    DEST=${BUILD_DIR}/${FILENAME}
+    # Inclusion – add matching paths to the restore set.
+    while IFS= read -r match; do
+      [[ -n "${match}" ]] && RESTORE_SET["${match}"]=1
+    done < <(expand_pattern "${line}")
   fi
+done < "${BUILD_DIR}/.buildcache"
 
-  # skip non-existing files
-  if ! [ -e ${SRC} ]; then
-    echo " ✗ - not found"
-    continue
-  fi
-
-  # create parent directory structure
-  mkdir -p $(dirname ${DEST})
-
-  # delete old files
-  if [ -e ${DEST} ]; then
-    rm -r ${DEST}
-  fi
-
-  # copy files from cache
-  cp -r ${SRC} ${DEST}
-
-  echo " ✓"
+# Restore all collected paths.
+for FILENAME in "${!RESTORE_SET[@]}"; do
+  restore_path "${FILENAME}"
 done

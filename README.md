@@ -20,10 +20,31 @@ https://github.com/zakjan/heroku-buildpack-cachesave#1.0.1
 `.buildcache`:
 
 ```
+# Cache dependency directories
 code/server/node_modules
 code/client/node_modules
 code/client/bower_components
+
+# Cache all .jar files at any depth
+**/*.jar
+
+# Cache assets directory (trailing slash = directories only)
+assets/
+
+# Exclude a specific path from being cached
+!code/client/node_modules/tmp
 ```
+
+### `.buildcache` Syntax
+
+The `.buildcache` file supports a `.gitignore`-like syntax:
+
+- **Literal paths**: `code/server/node_modules` — matches the exact path.
+- **Glob patterns**: `*.js`, `**/*.jar` — shell-style wildcards. `**` matches any depth.
+- **Directory-only** (trailing `/`): `assets/` — only matches directories.
+- **Negation** (`!`): `!path/to/exclude` — removes previously matched paths from the restore set.
+- **Comments** (`#`): Lines starting with `#` are ignored.
+- **Empty lines** are ignored.
 
 ## Troubleshooting
 
