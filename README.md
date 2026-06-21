@@ -51,6 +51,10 @@ inclusion and negation lines are handled differently:
 - **Comments** (`#`): Lines starting with `#` are ignored.
 - **Empty lines** are ignored.
 
+Listed paths that do not exist in the cache (for example on the first build,
+before anything has been cached) are silently skipped — they are logged as
+`✗ - not found` and do not fail the build.
+
 Inclusions are restored in parallel to speed up the cache load.
 
 ## Troubleshooting

@@ -177,7 +177,7 @@ setup_cache; reset_build
 for i in $(seq 1 30); do
   echo "data${i}" > "${CACHE_ROOT}/file${i}.dat"
 done
-: > "${BUILD_DIR}/.buildcache"
+touch "${BUILD_DIR}/.buildcache"
 for i in $(seq 1 30); do
   echo "file${i}.dat" >> "${BUILD_DIR}/.buildcache"
 done
